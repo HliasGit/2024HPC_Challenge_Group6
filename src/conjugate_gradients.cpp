@@ -4,7 +4,6 @@
 #include <omp.h>
 #include <time.h>
 
-
 bool read_matrix_from_file(const char * filename, double ** matrix_out, size_t * num_rows_out, size_t * num_cols_out)
 {
     double * matrix;
@@ -87,7 +86,7 @@ void axpby(double alpha, const double * x, double beta, double * y, size_t size)
 {
     // y = alpha * x + beta * y
 
-    #pragma omp parallel for
+    #pragma omp simd
     for(size_t i = 0; i < size; i++)
     {
         y[i] = alpha * x[i] + beta * y[i];
@@ -123,7 +122,7 @@ void conjugate_gradients(const double * A, const double * b, double * x, size_t 
     double * Ap = new double[size];
     int num_iters;
 
-    #pragma omp parallel for 
+    #pragma omp simd
     for(size_t i = 0; i < size; i++)
     {
         x[i] = 0.0;
@@ -173,8 +172,11 @@ int main(int argc, char ** argv)
     const char * input_file_matrix = "io/matrix.bin";
     const char * input_file_rhs = "io/rhs.bin";
     const char * output_file_sol = "io/sol.bin";
+
     int max_iters = 1000;
     double rel_error = 1e-9;
+
+    double start_time, end_time;
 
     if(argc > 1) input_file_matrix = argv[1];
     if(argc > 2) input_file_rhs = argv[2];
@@ -248,9 +250,9 @@ int main(int argc, char ** argv)
 
     printf("Solving the system ...\n");
     double * sol = new double[size];
-    clock_t startTime = clock();
+    start_time = omp_get_wtime();
     conjugate_gradients(matrix, rhs, sol, size, max_iters, rel_error);
-    clock_t endTime = clock();
+    end_time = omp_get_wtime();
 
     printf("Done\n");
     printf("\n");
@@ -272,11 +274,14 @@ int main(int argc, char ** argv)
     delete[] sol;
 
     printf("Finished successfully\n");
+    printf("\n");
 
     printf("Writing time to CSV file ...\n");
-    double totalTime = ((double) (endTime - startTime)) / CLOCKS_PER_SEC;
-    unsigned int num_threads = omp_get_num_threads();
-    printf("Execution time = %.6f\n", totalTime);
-    fprintf(csvFile, "%d, %.6f", num_threads, totalTime);
+    unsigned int num_threads = omp_get_max_threads();
+    double tot_time = end_time - start_time;
+    printf("Execution time = %.6f [s]\n", tot_time);
+    printf("Start clock: %.6f \n", (double) start_time);
+    printf("End clock: %.6f \n", (double) end_time);
+    fprintf(csvFile, "%d, %.6f\n", num_threads, tot_time);
     return 0;
 }
