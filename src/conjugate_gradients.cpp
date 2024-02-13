@@ -1,7 +1,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
-
+#include <omp.h>
+#include <time.h>
 
 
 bool read_matrix_from_file(const char * filename, double ** matrix_out, size_t * num_rows_out, size_t * num_cols_out)
@@ -72,6 +73,7 @@ void print_matrix(const double * matrix, size_t num_rows, size_t num_cols, FILE 
 double dot(const double * x, const double * y, size_t size)
 {
     double result = 0.0;
+    #pragma omp parallel reduction (+ : result)
     for(size_t i = 0; i < size; i++)
     {
         result += x[i] * y[i];
@@ -85,6 +87,7 @@ void axpby(double alpha, const double * x, double beta, double * y, size_t size)
 {
     // y = alpha * x + beta * y
 
+    #pragma omp parallel for
     for(size_t i = 0; i < size; i++)
     {
         y[i] = alpha * x[i] + beta * y[i];
@@ -97,9 +100,11 @@ void gemv(double alpha, const double * A, const double * x, double beta, double 
 {
     // y = alpha * A * x + beta * y;
 
+    #pragma omp parallel for
     for(size_t r = 0; r < num_rows; r++)
     {
         double y_val = 0.0;
+        #pragma omp parallel reduction (+ : y_val)
         for(size_t c = 0; c < num_cols; c++)
         {
             y_val += alpha * A[r * num_cols + c] * x[c];
@@ -118,6 +123,7 @@ void conjugate_gradients(const double * A, const double * b, double * x, size_t 
     double * Ap = new double[size];
     int num_iters;
 
+    #pragma omp parallel for 
     for(size_t i = 0; i < size; i++)
     {
         x[i] = 0.0;
@@ -184,7 +190,13 @@ int main(int argc, char ** argv)
     printf("  rel_error:         %e\n", rel_error);
     printf("\n");
 
+    // File csv with execution time
+    FILE *csvFile = fopen("io/execution_time.csv", "a");
 
+    if (csvFile == NULL) {
+        fprintf(stderr, "Error while opening the CSV file.\n");
+        return 1;
+    }
 
     double * matrix;
     double * rhs;
@@ -236,13 +248,18 @@ int main(int argc, char ** argv)
 
     printf("Solving the system ...\n");
     double * sol = new double[size];
+    clock_t startTime = clock();
     conjugate_gradients(matrix, rhs, sol, size, max_iters, rel_error);
+    clock_t endTime = clock();
+
     printf("Done\n");
     printf("\n");
 
     printf("Writing solution to file ...\n");
     bool success_write_sol = write_matrix_to_file(output_file_sol, sol, size, 1);
-    if(!success_write_sol)
+    // The test is made without printing the file
+    bool write_sol = false;
+    if(write_sol && !success_write_sol)
     {
         fprintf(stderr, "Failed to save solution\n");
         return 6;
@@ -256,5 +273,10 @@ int main(int argc, char ** argv)
 
     printf("Finished successfully\n");
 
+    printf("Writing time to CSV file ...\n");
+    double totalTime = ((double) (endTime - startTime)) / CLOCKS_PER_SEC;
+    unsigned int num_threads = omp_get_num_threads();
+    printf("Execution time = %.6f\n", totalTime);
+    fprintf(csvFile, "%d, %.6f", num_threads, totalTime);
     return 0;
 }
