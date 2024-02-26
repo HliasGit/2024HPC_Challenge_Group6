@@ -1,1 +1,0 @@
-# 2024HPC_Challenge_Group6
