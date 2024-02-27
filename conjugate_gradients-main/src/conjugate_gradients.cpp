@@ -1,10 +1,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
-#include <iostream>
-#include <mkl.h> // Include Intel MKL header
-#include <mpi.h>
-#include <vector>
+
 
 
 bool read_matrix_from_file(const char * filename, double ** matrix_out, size_t * num_rows_out, size_t * num_cols_out)
@@ -72,88 +69,88 @@ void print_matrix(const double * matrix, size_t num_rows, size_t num_cols, FILE 
 
 
 
+double dot(const double * x, const double * y, size_t size)
+{
+    double result = 0.0;
+    for(size_t i = 0; i < size; i++)
+    {
+        result += x[i] * y[i];
+    }
+    return result;
+}
+
+
+
+void axpby(double alpha, const double * x, double beta, double * y, size_t size)
+{
+    // y = alpha * x + beta * y
+
+    for(size_t i = 0; i < size; i++)
+    {
+        y[i] = alpha * x[i] + beta * y[i];
+    }
+}
+
+
+
+void gemv(double alpha, const double * A, const double * x, double beta, double * y, size_t num_rows, size_t num_cols)
+{
+    // y = alpha * A * x + beta * y;
+
+    for(size_t r = 0; r < num_rows; r++)
+    {
+        double y_val = 0.0;
+        for(size_t c = 0; c < num_cols; c++)
+        {
+            y_val += alpha * A[r * num_cols + c] * x[c];
+        }
+        y[r] = beta * y[r] + y_val;
+    }
+}
+
+
+
 void conjugate_gradients(const double * A, const double * b, double * x, size_t size, int max_iters, double rel_error)
 {
-    int rank, size_mpi;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size_mpi);
-
-    size_t local_size = size / size_mpi;
-    size_t residual = size % size_mpi;
-
-    double *local_A = new double[local_size * size];
-    double *local_b = new double[local_size];
-    double *local_x = new double[local_size];
-    double *local_r = new double[local_size];
-    double *local_p = new double[local_size];
-    double *local_Ap = new double[local_size];
-
-    MPI_Scatter(A, local_size * size, MPI_DOUBLE, local_A, local_size * size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-    MPI_Scatter(b, local_size, MPI_DOUBLE, local_b, local_size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
     double alpha, beta, bb, rr, rr_new;
-    double global_rr_new, global_rr;
+    double * r = new double[size];
+    double * p = new double[size];
+    double * Ap = new double[size];
     int num_iters;
 
-    // Initialize local vectors
-    for (size_t i = 0; i < local_size; i++)
+    for(size_t i = 0; i < size; i++)
     {
-        local_x[i] = 0.0;
-        local_r[i] = local_b[i];
-        local_p[i] = local_b[i];
+        x[i] = 0.0;
+        r[i] = b[i];
+        p[i] = b[i];
     }
 
-    bb = cblas_ddot(size, b, 1, b, 1);
-    MPI_Allreduce(&bb, &global_rr, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-    rr = global_rr;
-    
+    bb = dot(b, b, size);
+    rr = bb;
     for(num_iters = 1; num_iters <= max_iters; num_iters++)
     {
-        cblas_dgemv(CblasRowMajor, CblasNoTrans, local_size, size, 1.0, local_A, size, local_p, 1, 0.0, local_Ap, 1);
-
-        // Compute alpha
-        double local_pAp = cblas_ddot(local_size, local_p, 1, local_Ap, 1);
-        MPI_Allreduce(&local_pAp, &alpha, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        alpha = rr / alpha;
-
-        // Update x and r locally
-        cblas_daxpy(local_size, alpha, local_p, 1, local_x, 1);
-        cblas_daxpy(local_size, -alpha, local_Ap, 1, local_r, 1);
-
-        // Compute global rr_new
-        double local_rr_new = cblas_ddot(local_size, local_r, 1, local_r, 1);
-        MPI_Allreduce(&local_rr_new, &global_rr_new, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-        rr_new = global_rr_new;
-
-        // Check convergence
-        if (std::sqrt(rr_new / global_rr) < rel_error)
-            break;
-
-        // Compute beta
+        gemv(1.0, A, p, 0.0, Ap, size, size);
+        alpha = rr / dot(p, Ap, size);
+        axpby(alpha, p, 1.0, x, size);
+        axpby(-alpha, Ap, 1.0, r, size);
+        rr_new = dot(r, r, size);
         beta = rr_new / rr;
         rr = rr_new;
-
-        // Update p locally
-        cblas_dscal(local_size, beta, local_p, 1);
-        cblas_daxpy(local_size, 1.0, local_r, 1, local_p, 1);
+        if(std::sqrt(rr / bb) < rel_error) { break; }
+        axpby(1.0, r, beta, p, size);
     }
 
-    delete[] local_A;
-    delete[] local_b;
-    delete[] local_x;
-    delete[] local_r;
-    delete[] local_p;
-    delete[] local_Ap;
+    delete[] r;
+    delete[] p;
+    delete[] Ap;
 
-    if (num_iters <= max_iters)
+    if(num_iters <= max_iters)
     {
-        if (rank == 0)
-            printf("Converged in %d iterations, relative error is %e\n", num_iters, std::sqrt(rr_new / global_rr));
+        printf("Converged in %d iterations, relative error is %e\n", num_iters, std::sqrt(rr / bb));
     }
     else
     {
-        if (rank == 0)
-            printf("Did not converge in %d iterations, relative error is %e\n", max_iters, std::sqrt(rr_new / global_rr));
+        printf("Did not converge in %d iterations, relative error is %e\n", max_iters, std::sqrt(rr / bb));
     }
 }
 
@@ -163,13 +160,6 @@ void conjugate_gradients(const double * A, const double * b, double * x, size_t 
 
 int main(int argc, char ** argv)
 {
-    MPI_Init(&argc, &argv);
-
-    int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
-    double start_time = MPI_Wtime();
-    
     printf("Usage: ./random_matrix input_file_matrix.bin input_file_rhs.bin output_file_sol.bin max_iters rel_error\n");
     printf("All parameters are optional and have default values\n");
     printf("\n");
@@ -247,7 +237,6 @@ int main(int argc, char ** argv)
     printf("Solving the system ...\n");
     double * sol = new double[size];
     conjugate_gradients(matrix, rhs, sol, size, max_iters, rel_error);
-    if (rank == 0) {
     printf("Done\n");
     printf("\n");
 
@@ -260,20 +249,12 @@ int main(int argc, char ** argv)
     }
     printf("Done\n");
     printf("\n");
-    }
 
     delete[] matrix;
     delete[] rhs;
     delete[] sol;
 
-    double end_time = MPI_Wtime();
-
-    if (rank == 0) {
-        printf("The program is executed in: %f seconds\n", end_time - start_time);
-        printf("Finished successfully\n");
-    }
-
-    MPI_Finalize();
+    printf("Finished successfully\n");
 
     return 0;
 }
