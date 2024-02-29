@@ -1,7 +1,7 @@
 #!/bin/bash -l
-#SBATCH -N 1
-#SBATCH --ntasks=2
-#SBATCH --cpus-per-task=1
+#SBATCH -N 3
+#SBATCH --ntasks=40
+#SBATCH --cpus-per-task=16
 #SBATCH -p cpu
 #SBATCH -q test
 #SBATCH --time 00:30:00
@@ -20,4 +20,6 @@ make
 cd ..
 
 #Execute the program
-srun build/test io/matrix.bin io/rhs.bin io/sol.bin
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+
+srun  --mpi=pspmix --cpus-per-task=$SLURM_CPUS_PER_TASK build/test io/matrix.bin io/rhs.bin
