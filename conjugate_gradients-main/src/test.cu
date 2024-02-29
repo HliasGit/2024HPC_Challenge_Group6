@@ -28,13 +28,13 @@ int main (void)
         }
     }
     cudaStat = cudaMalloc ((void**)&devPtrA, M*N*sizeof(*a));
-    printf("%s", cudaGetErrorString(cudaStat));
+    if (cudaStat != cudaSuccess) {
+        printf ("Memory allcation failed");
+        printf ("Error value = %s ", cudaStat);
 
-    // if (cudaStat != cudaSuccess) {
-    //     printf ("Memory allcation failed");
-    //     printf ("Error value = %s ", cudaStat);
+        return EXIT_FAILURE;
+    }
 
-    //     return EXIT_FAILURE;
-    // }
+    printf("OK !\n");
     return 0;
 }
