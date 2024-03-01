@@ -2,7 +2,7 @@
 CC=nvcc
 
 SERIAL_PROGRAM = "serial_cg"
-CUDA_PROGRAM = "test"
+CUDA_PROGRAM = "conjugate_gradients"
 # These are the options we pass to the compiler.
 # -std=c++14 means we want to use the C++14 standard.
 # -stdlib=libc++ specifies that we want to use the standard library implementation called libc++
@@ -12,16 +12,18 @@ CUDA_PROGRAM = "test"
 CFLAGS = -std=c++20 -c -O0 
 
 # Additional flags for CUDA
-CUDAFLAGS = -arch=sm_35
+CUDAFLAGS = -arch=sm_70
 
 # Matrix size
 MAT_SIZE = 10000
 
+load:
+	module load CUDA
 serial:
 	$(CC) src/$(SERIAL_PROGRAM).cpp -o build/$(SERIAL_PROGRAM)
 
 cuda:
-	$(CC) -lcublas src/$(CUDA_PROGRAM).cu -o build/$(CUDA_PROGRAM)
+	$(CC) -lcublas -std=c++20 src/$(CUDA_PROGRAM).cpp -o build/$(CUDA_PROGRAM)
 
 clean:
 	rm -f build/test

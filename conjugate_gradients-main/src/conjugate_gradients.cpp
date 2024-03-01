@@ -1,8 +1,4 @@
-#include <cstdio>
-#include <cstdlib>
-#include <cmath>
-
-
+#include "cuda_kernels.hpp"
 
 bool read_matrix_from_file(const char * filename, double ** matrix_out, size_t * num_rows_out, size_t * num_cols_out)
 {
@@ -67,56 +63,63 @@ void print_matrix(const double * matrix, size_t num_rows, size_t num_cols, FILE 
     }
 }
 
-
-
-double dot(const double * x, const double * y, size_t size)
-{
-    double result = 0.0;
-    for(size_t i = 0; i < size; i++)
-    {
-        result += x[i] * y[i];
-    }
-    return result;
-}
-
-
-
-void axpby(double alpha, const double * x, double beta, double * y, size_t size)
-{
-    // y = alpha * x + beta * y
-
-    for(size_t i = 0; i < size; i++)
-    {
-        y[i] = alpha * x[i] + beta * y[i];
-    }
-}
-
-
-
-void gemv(double alpha, const double * A, const double * x, double beta, double * y, size_t num_rows, size_t num_cols)
-{
-    // y = alpha * A * x + beta * y;
-
-    for(size_t r = 0; r < num_rows; r++)
-    {
-        double y_val = 0.0;
-        for(size_t c = 0; c < num_cols; c++)
-        {
-            y_val += alpha * A[r * num_cols + c] * x[c];
-        }
-        y[r] = beta * y[r] + y_val;
-    }
-}
-
-
-
-void conjugate_gradients(const double * A, const double * b, double * x, size_t size, int max_iters, double rel_error)
+bool conjugate_gradients(const double * A, const double * b, double * x, size_t size, int max_iters, double rel_error)
 {
     double alpha, beta, bb, rr, rr_new;
+    const int tot_size = size * size;
+    constexpr int size_byte = sizeof(double);
     double * r = new double[size];
     double * p = new double[size];
     double * Ap = new double[size];
+
     int num_iters;
+
+    // Init GPU parameters
+    cudaError_t cudaStat;
+    cublasStatus_t stat;
+    cudaError_t err_memcpy;
+    cublasHandle_t handler;
+    double *devPtrA, *devPtr_r, *devPtr_p;
+    double *devPtr_alpha, *devPtr_beta, *devPtr_bb, *devPtr_rr;
+
+    // Allocate device memory: A, p, r 
+    cudaStat = cudaMalloc ((void**)&devPtrA, tot_size * size_byte);
+    cudaStat = cudaMalloc ((void*)&devPtr_p, size * size_byte);
+    cudaStat = cudaMalloc ((void*)&devPtr_r, size * size_byte)
+
+    cudaStat = cudaMalloc ((void*)&devPtr_alpha, size_byte);
+    cudaStat = cudaMalloc ((void*)&devPtr_beta, size_byte);
+    cudaStat = cudaMalloc ((void*)&devPtr_bb, size_byte);
+    cudaStat = cudaMalloc ((void*)&devPtr_rr, size_byte);
+    if (cudaStat != cudaSuccess)
+    {
+        printf("cudaMalloc doesn't work.");
+        return 0;
+    }
+    // Create handle
+    stat = cublasCreate(&handler);
+    if (stat != CUBLAS_STATUS_SUCCESS) 
+    {
+        printf ("CUBLAS initialization failed\n");
+        return false;
+    }
+    // Move data to the device
+    stat = cublasSetMatrix (size, size, size_byte, A, size, devPtrA, size);
+    stat = cublasSetVector (size, size_byte, p, 0, devPtr_p, 0);
+    stat = cublasSetVector (size, size_byte, r, 0, devPtr_r, 0);
+    err_memcpy = cudaMemcpy(devPtr_alpha, &alpha, size_byte, cudaMemcpyHostToDevice);
+    err_memcpy = cudaMemcpy(devPtr_beta, &beta, size_byte, cudaMemcpyHostToDevice);
+    err_memcpy = cudaMemcpy(devPtr_bb, &b, size_byte, cudaMemcpyHostToDevice);
+    err_memcpy = cudaMemcpy(devPtr_rr, &rr, size_byte, cudaMemcpyHostToDevice);
+
+    if (stat != CUBLAS_STATUS_SUCCESS) {
+        printf ("Data download failed");
+        cudaFree (devPtrA);
+        cudaFree (devPtr_p);
+        cudaFree (devPtr_r);
+        cublasDestroy(handler);
+        return false;
+    }
 
     for(size_t i = 0; i < size; i++)
     {
@@ -125,21 +128,27 @@ void conjugate_gradients(const double * A, const double * b, double * x, size_t 
         p[i] = b[i];
     }
 
-    bb = dot(b, b, size);
+    bb = cuda_dot(b, b, size, &handler);
     rr = bb;
     for(num_iters = 1; num_iters <= max_iters; num_iters++)
     {
-        gemv(1.0, A, p, 0.0, Ap, size, size);
-        alpha = rr / dot(p, Ap, size);
-        axpby(alpha, p, 1.0, x, size);
-        axpby(-alpha, Ap, 1.0, r, size);
-        rr_new = dot(r, r, size);
+        cuda_gemv(1.0, A, p, 0.0, Ap, size, size, &handler);
+        alpha = rr / cuda_dot(p, Ap, size, &handler);
+        cuda_axpby(alpha, p, 1.0, x, size, &handler);
+        cuda_axpby(-alpha, Ap, 1.0, r, size, &handler);
+        rr_new = cuda_dot(r, r, size, &handler);
         beta = rr_new / rr;
         rr = rr_new;
         if(std::sqrt(rr / bb) < rel_error) { break; }
-        axpby(1.0, r, beta, p, size);
+        cuda_axpby(1.0, r, beta, p, size, &handler);
     }
 
+    // Free device space
+    cudaFree (devPtrA);
+    cudaFree (devPtr_p);
+    cudaFree (devPtr_r);
+    cublasDestroy(handler);
+    
     delete[] r;
     delete[] p;
     delete[] Ap;
@@ -236,7 +245,13 @@ int main(int argc, char ** argv)
 
     printf("Solving the system ...\n");
     double * sol = new double[size];
-    conjugate_gradients(matrix, rhs, sol, size, max_iters, rel_error);
+
+    const bool cg_err = conjugate_gradients(matrix, rhs, sol, size, max_iters, rel_error);
+    if (cg_err)
+    {
+        printf("CG failed.");
+        return 0;
+    }
     printf("Done\n");
     printf("\n");
 
