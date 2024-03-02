@@ -12,18 +12,22 @@ CUDA_PROGRAM = "conjugate_gradients"
 CFLAGS = -std=c++20 -c -O0 
 
 # Additional flags for CUDA
-CUDAFLAGS = -arch=sm_70
+CUDAFLAGS = -lcublas -O2
 
 # Matrix size
 MAT_SIZE = 10000
 
+init:
+	salloc -A p200301 --res  gpudev -q dev -N 1 -t 00:20:00 && module load CUDA
+matrix:
+	./random_spd_system.sh $(MAT_SIZE) io/matrix.bin io/rhs.bin
 load:
 	module load CUDA
 serial:
 	$(CC) src/$(SERIAL_PROGRAM).cpp -o build/$(SERIAL_PROGRAM)
 
 cuda:
-	$(CC) -lcublas -std=c++20 src/$(CUDA_PROGRAM).cpp -o build/$(CUDA_PROGRAM)
+	$(CC) $(CUDAFLAGS) src/$(CUDA_PROGRAM).cu -o build/$(CUDA_PROGRAM)
 
 clean:
 	rm -f build/test
