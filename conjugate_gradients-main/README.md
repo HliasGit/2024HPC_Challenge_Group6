@@ -11,13 +11,14 @@
 ## Description of the project
 
 GPU version for Conjugate Gradient Method.
+
 Inorder to test your code on MeluXina, please use the interactive node 
 ```
 salloc -A p200301 --res gpudev -q dev -N 1 -t 00:30:00
 ```
 
 
-To make the program work, I need to execute this command first
+To make the program work, execute this command first
 ```
 module load CUDA
 ```
@@ -27,12 +28,12 @@ Create a directory for the input and output files
 mkdir io
 ```
 
-To compile the program, I use
+To compile the program use
 ```
 make cuda
 ```
 
-To generate a random SPD system of 10000 equations and unknowns, use e.g.
+To generate a random SPD system of 10000 equations and unknowns, use e.g.. The default size is 10000.
 ```
 make matrix MAT_SIZE=10000
 ```
