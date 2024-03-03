@@ -11,7 +11,7 @@ int main(void)
     double result=0., resulth=0.;
 
     for(int i=0; i<nvals; i++) {
-        x[i] = y[i] = 1.0;
+        x[i] = y[i] = 2.0;
         resulth += x[i] * y[i];
     }
 
@@ -26,7 +26,7 @@ int main(void)
     cudaMemcpy(x_, x, sz, cudaMemcpyHostToDevice);
     cudaMemcpy(y_, y, sz, cudaMemcpyHostToDevice);
 
-    cublasDdot(h, nvals, x_, 1, y_, 1, result_);
+    cublasDdot(h, nvals, x_, 1, x_, 1, result_);
 
     cudaMemcpy(&result, result_, sizeof(double), cudaMemcpyDeviceToHost);
 
