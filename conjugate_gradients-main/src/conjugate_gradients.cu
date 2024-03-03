@@ -71,12 +71,13 @@ void print_matrix(const double * matrix, size_t num_rows, size_t num_cols, FILE 
 }
 void print_vet(const double * vet, size_t num_rows, FILE * file = stdout)
 {
-    fprintf(file, "%z\n", num_rows);
+    fprintf(file, "%z\t", num_rows);
     for(size_t r = 0; r < num_rows; r++)
     {
         double val = vet[r];
-        printf("%+6.3f\n ", val);
+        printf("%+6.3f\t ", val);
     }
+    printf("\n");
 }
 
 
@@ -100,11 +101,11 @@ __global__ void copy_value(double * a, const double * b)
 }   
 __global__ void a_frac_b(const double * x, const double * y, double * z)
 {
-    *z = *x / *y;
+    *z = (*x) / (*y);
 }
 __global__ void inv_alpha(const double * alpha, double * alpha_inv)
 {
-    *alpha_inv = - *alpha;
+    *alpha_inv = - (*alpha);
 }
 
 __global__ void scalar_vet(const double * alpha, double * x, size_t size)
@@ -122,7 +123,7 @@ void print_matrix_mcpy(const double * d_A, size_t rows, size_t columns)
     if (columns > 0)
     {
         double *h_A = (double *) malloc(rows * columns * sizeof(double));
-        cudaError_t err = cudaMemcpy(h_A, d_A, rows * columns * sizeof(double), cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_A, d_A, rows*columns, cudaMemcpyDeviceToHost);
         print_matrix(h_A, rows, columns);
     }
     else
@@ -132,10 +133,14 @@ void print_matrix_mcpy(const double * d_A, size_t rows, size_t columns)
         print_vet(h_A, rows);
     }
 }
-
+void print_scalar(const double * scalar)
+{
+        double *h_A = (double *) malloc(sizeof(double));
+        cudaError_t err = cudaMemcpy(h_A, scalar, sizeof(double), cudaMemcpyDeviceToHost);
+        printf("%+6.5f\n", *h_A);
+}
 void conjugate_gradients(const double * d_A, double * d_x, double * d_p, double * d_r,  size_t size, int max_iters, double rel_error)
 {
-    // Create paramters
     double* d_beta;
     double* d_alpha; 
     double* d_alpha_;
@@ -145,13 +150,13 @@ void conjugate_gradients(const double * d_A, double * d_x, double * d_p, double 
 	double* d_rr;
 	double* d_bb;
     double* d_Ap;
-
     double * tmp;
-    // Relative residual
+
+    // Host relative residual
     double h_bb;
     double h_rr;
 
-    int num_iters;
+    // Allocate device memory 
     cudaMalloc((void **) &d_Ap, size * sizeof(double));
 	cudaMalloc((void **) &d_beta, sizeof(double));
     cudaMalloc((void **) &tmp, sizeof(double));
@@ -171,8 +176,9 @@ void conjugate_gradients(const double * d_A, double * d_x, double * d_p, double 
         printf ("CUBLAS initialization failed\n");
         return;
     }
-
+    // Set only GPU pointers for cuBLAS functions
     cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_DEVICE);
+    // Choose block and grid dimensions
     dim3 vec_block_dim(BLOCK_DIM_VET);
 	dim3 vec_grid_dim((size + BLOCK_DIM_VET - 1) / BLOCK_DIM_VET);
     // Set alpha = 1 and beta = 0
@@ -181,38 +187,41 @@ void conjugate_gradients(const double * d_A, double * d_x, double * d_p, double 
     init_cg_solver <<<vec_grid_dim, vec_block_dim>>> (d_x, d_p, d_r, size);
     
     // Coompute r * r = b*b
-    cublasDdot(handle, size, d_r, size, d_r, size, d_rr);
+    cublasDdot(handle, size, d_r, 1, d_r, 1, d_rr);
     copy_value <<<1,1>>> (d_bb, d_rr);
     cudaMemcpy(&h_bb, d_bb, sizeof(double), cudaMemcpyDeviceToHost);
 
+    int num_iters;
     for(num_iters = 1; num_iters <= max_iters; num_iters++)
     {
         // alpha(k) = rr / p A p
         cublasDgemv(handle, CUBLAS_OP_N, size, size, a, d_A, size, d_p, 1, b, d_Ap, 1);
-        cublasDdot(handle, size, d_p, size, d_Ap, size, tmp);
+        cublasDdot(handle, size, d_p, 1, d_Ap, 1, tmp);
         a_frac_b<<<1, 1>>> (d_rr, tmp, d_alpha);
-        
-        inv_alpha<<<1,1>>> (d_alpha, d_alpha_);
+        // Compute -alpha
+        inv_alpha<<<1, 1>>> (d_alpha, d_alpha_);
 
         // x(k+1) = x(k) + alpha * p
-        cublasDaxpy(handle, size, d_alpha, d_p, size, d_x, size);
+        cublasDaxpy(handle, size, d_alpha, d_p, 1, d_x, 1);
+
         //r(k+1) = r(k) - alpha * A * p
-        cublasDaxpy(handle, size, d_alpha_, d_Ap, size, d_r, size);
+        cublasDaxpy(handle, size, d_alpha_, d_Ap, 1, d_r, 1);
+
         //beta(k) = r(k+1)r(k+1) / r(k)r(k)
-        cublasDdot(handle, size, d_r, size, d_r, size, d_rr_new);
+        cublasDdot(handle, size, d_r, 1, d_r, 1, d_rr_new);
         a_frac_b <<<1, 1>>> (d_rr_new, d_rr, d_beta);
 
         // Update d_rr
         copy_value <<<1, 1>>> (d_rr, d_rr_new);
 
+        // Synchronize host's relative residuals
         cudaMemcpy(&h_rr, d_rr, sizeof(double), cudaMemcpyDeviceToHost);
-        
         // Stopping criteria
         if(std::sqrt(h_rr / h_bb) < rel_error) 
             break; 
         // p(k+1) = r(k+1) + beta * p(k)
-        scalar_vet <<<vec_grid_dim, vec_block_dim>>> (d_alpha, d_p, size);
-        cublasDaxpy(handle, size, d_r, a, size, d_p, size);
+        scalar_vet <<<vec_grid_dim, vec_block_dim>>> (d_beta, d_p, size);
+        cublasDaxpy(handle, size, a, d_r, 1, d_p, 1);
     }
 
     if(num_iters <= max_iters)
@@ -306,28 +315,29 @@ int main(int argc, char ** argv)
     printf("Solving the system ...\n");
     double * sol = new double[size];
 
-    // allocate device memory
+    // Allocate device memory
 	double* d_A;
 	double* d_b;
 	double* d_x;
 	double* d_p;
 	double* d_r;
 	double* d_temp;
-	cudaError_t cudaStat = cudaMalloc((void **) &d_A, size * size * sizeof(double));
+	cudaMalloc((void **) &d_A, size * size * sizeof(double));
 	cudaMalloc((void **) &d_b, size * sizeof(double));
 	cudaMalloc((void **) &d_x, size * sizeof(double));
 	cudaMalloc((void **) &d_p, size * sizeof(double));
 	cudaMalloc((void **) &d_r, size * sizeof(double));
 	cudaMalloc((void **) &d_temp, size * sizeof(double));
 
-    // copy host memory to device
+    // Copy host memory to device
 	cudaMemcpy(d_A, matrix, size * size * sizeof(double), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_x, sol, size * sizeof(double), cudaMemcpyHostToDevice);
-	// assume x0 = 0
+	// Assume x0 = 0
 	cudaMemcpy(d_p, rhs, size * sizeof(double), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_r, rhs, size * sizeof(double), cudaMemcpyHostToDevice);
-
+    // Solve Ax = b 
     conjugate_gradients(d_A, d_x, d_p, d_r, size, max_iters, rel_error);
+
     printf("Done\n");
     printf("\n");
 
