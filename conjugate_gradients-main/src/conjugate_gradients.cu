@@ -69,32 +69,16 @@ void print_matrix(const double * matrix, size_t num_rows, size_t num_cols, FILE 
         printf("\n");
     }
 }
-
-
-
-double dot(const double * x, const double * y, size_t size, cublasHandle_t handle)
+void print_vet(const double * vet, size_t num_rows, FILE * file = stdout)
 {
-    // Scalar product
-    double result;
-    cublasDdot(handle, size, x, size, y, size, &result);
-    return result;
+    fprintf(file, "%z\n", num_rows);
+    for(size_t r = 0; r < num_rows; r++)
+    {
+        double val = vet[r];
+        printf("%+6.3f\n ", val);
+    }
 }
 
-
-
-void axpby(double * alpha, const double * x, double * beta, double * y, size_t size, cublasHandle_t handle)
-{
-    // y = alpha * x + beta * y
-    cublasDaxpy(handle, size, alpha, x, size, y, size);
-}
-
-
-
-void gemv(double * alpha, const double * A, const double * x, double * beta, double * y, size_t size, cublasHandle_t handle)
-{
-    // y = alpha * A * x + beta * y;
-    cublasDgemv(handle, CUBLAS_OP_N, size, size, alpha, A, size, x, size, beta, y, size);
-}
 
 __global__ void init_cg_solver(double * x, double * p, const double * r, size_t size)
 {   
@@ -120,8 +104,35 @@ __global__ void a_frac_b(const double * x, const double * y, double * z)
 }
 __global__ void inv_alpha(const double * alpha, double * alpha_inv)
 {
-    *alpha_inv = *alpha;
+    *alpha_inv = - *alpha;
 }
+
+__global__ void scalar_vet(const double * alpha, double * x, size_t size)
+{
+    unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < size) 
+    {
+		x[index] = (*alpha) * x[index];
+    }
+}
+
+void print_matrix_mcpy(const double * d_A, size_t rows, size_t columns)
+{   
+
+    if (columns > 0)
+    {
+        double *h_A = (double *) malloc(rows * columns * sizeof(double));
+        cudaError_t err = cudaMemcpy(h_A, d_A, rows * columns * sizeof(double), cudaMemcpyDeviceToHost);
+        print_matrix(h_A, rows, columns);
+    }
+    else
+    {
+        double *h_A = (double *) malloc(rows * sizeof(double));
+        cudaError_t err = cudaMemcpy(h_A, d_A, rows * sizeof(double), cudaMemcpyDeviceToHost);
+        print_vet(h_A, rows);
+    }
+}
+
 void conjugate_gradients(const double * d_A, double * d_x, double * d_p, double * d_r,  size_t size, int max_iters, double rel_error)
 {
     // Create paramters
@@ -134,7 +145,6 @@ void conjugate_gradients(const double * d_A, double * d_x, double * d_p, double 
 	double* d_rr;
 	double* d_bb;
     double* d_Ap;
-    
 
     double * tmp;
     // Relative residual
@@ -155,47 +165,54 @@ void conjugate_gradients(const double * d_A, double * d_x, double * d_p, double 
 
     // Create cuBLAS handle
     cublasHandle_t handle;
-    cublasCreate(&handle);
+    cublasStatus_t stat = cublasCreate(&handle);
+    if (stat != CUBLAS_STATUS_SUCCESS) 
+    {
+        printf ("CUBLAS initialization failed\n");
+        return;
+    }
 
+    cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_DEVICE);
     dim3 vec_block_dim(BLOCK_DIM_VET);
 	dim3 vec_grid_dim((size + BLOCK_DIM_VET - 1) / BLOCK_DIM_VET);
     // Set alpha = 1 and beta = 0
     init_alpha_beta<<<1, 1>>>(a, b);
     // Init solver with x0 = 0 and p = r
     init_cg_solver <<<vec_grid_dim, vec_block_dim>>> (d_x, d_p, d_r, size);
+    
     // Coompute r * r = b*b
     cublasDdot(handle, size, d_r, size, d_r, size, d_rr);
     copy_value <<<1,1>>> (d_bb, d_rr);
+    cudaMemcpy(&h_bb, d_bb, sizeof(double), cudaMemcpyDeviceToHost);
 
     for(num_iters = 1; num_iters <= max_iters; num_iters++)
     {
         // alpha(k) = rr / p A p
-        cublasDgemv(handle, CUBLAS_OP_N, size, size, a, d_A, size, d_p, size, b, d_Ap, size);
+        cublasDgemv(handle, CUBLAS_OP_N, size, size, a, d_A, size, d_p, 1, b, d_Ap, 1);
         cublasDdot(handle, size, d_p, size, d_Ap, size, tmp);
         a_frac_b<<<1, 1>>> (d_rr, tmp, d_alpha);
         
         inv_alpha<<<1,1>>> (d_alpha, d_alpha_);
 
-        // x_(k+1) = x(k) + alpha * p
+        // x(k+1) = x(k) + alpha * p
         cublasDaxpy(handle, size, d_alpha, d_p, size, d_x, size);
         //r(k+1) = r(k) - alpha * A * p
         cublasDaxpy(handle, size, d_alpha_, d_Ap, size, d_r, size);
-        // beta(k) = r(k+1)r(k+1) / r(k)r(k)
+        //beta(k) = r(k+1)r(k+1) / r(k)r(k)
         cublasDdot(handle, size, d_r, size, d_r, size, d_rr_new);
         a_frac_b <<<1, 1>>> (d_rr_new, d_rr, d_beta);
 
         // Update d_rr
         copy_value <<<1, 1>>> (d_rr, d_rr_new);
 
-        // Compute relative residual
-        a_frac_b <<<1, 1>>> (d_rr, d_bb, tmp);
-        cudaMemcpy(d_rr, &h_rr, sizeof(double), cudaMemcpyDeviceToHost);
-        cudaMemcpy(d_bb, &h_bb, sizeof(double), cudaMemcpyDeviceToHost);
+        cudaMemcpy(&h_rr, d_rr, sizeof(double), cudaMemcpyDeviceToHost);
+        
         // Stopping criteria
         if(std::sqrt(h_rr / h_bb) < rel_error) 
             break; 
-        // p(k+1) = r(k+1) + beta * p
-        cublasDaxpy(handle, size, d_beta, d_p, size, d_r, size);
+        // p(k+1) = r(k+1) + beta * p(k)
+        scalar_vet <<<vec_grid_dim, vec_block_dim>>> (d_alpha, d_p, size);
+        cublasDaxpy(handle, size, d_r, a, size, d_p, size);
     }
 
     if(num_iters <= max_iters)
@@ -206,6 +223,8 @@ void conjugate_gradients(const double * d_A, double * d_x, double * d_p, double 
     {
         printf("Did not converge in %d iterations, relative error is %e\n", max_iters, std::sqrt(h_rr / h_bb));
     }
+
+    
 }
 
 int main(int argc, char ** argv)
@@ -294,7 +313,7 @@ int main(int argc, char ** argv)
 	double* d_p;
 	double* d_r;
 	double* d_temp;
-	cudaMalloc((void **) &d_A, size * size * sizeof(double));
+	cudaError_t cudaStat = cudaMalloc((void **) &d_A, size * size * sizeof(double));
 	cudaMalloc((void **) &d_b, size * sizeof(double));
 	cudaMalloc((void **) &d_x, size * sizeof(double));
 	cudaMalloc((void **) &d_p, size * sizeof(double));

@@ -18,7 +18,7 @@ CUDAFLAGS = -lcublas -O2
 MAT_SIZE = 10000
 
 init:
-	salloc -A p200301 --res  gpudev -q dev -N 1 -t 00:20:00 && module load CUDA
+	salloc -A p200301 --res  gpudev -q dev -N 1 -t 00:50:00
 matrix:
 	./random_spd_system.sh $(MAT_SIZE) io/matrix.bin io/rhs.bin
 load:
