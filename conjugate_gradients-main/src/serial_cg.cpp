@@ -1,7 +1,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
-
+#include <iostream>
+#include <vector>
+#include <string>
+#include <fstream>
+#include <chrono>
 
 
 bool read_matrix_from_file(const char * filename, double ** matrix_out, size_t * num_rows_out, size_t * num_cols_out)
@@ -160,101 +164,132 @@ void conjugate_gradients(const double * A, const double * b, double * x, size_t 
 
 int main(int argc, char ** argv)
 {
-    printf("Usage: ./random_matrix input_file_matrix.bin input_file_rhs.bin output_file_sol.bin max_iters rel_error\n");
-    printf("All parameters are optional and have default values\n");
-    printf("\n");
+    std::string matrix_name = "matrix";
+    std::string rhs_name    = "rhs";
+    std::vector<size_t> dimensionSize = {100, 1000, 10000, 20000, 30000};
+    std::ofstream convergence_file("build/performance.csv");
+    
+    int max_iters       = 1000000;
+    double rel_error    = 1e-8;
 
-    const char * input_file_matrix = "io/matrix.bin";
-    const char * input_file_rhs = "io/rhs.bin";
-    const char * output_file_sol = "io/sol.bin";
-    int max_iters = 1000;
-    double rel_error = 1e-9;
-
-    if(argc > 1) input_file_matrix = argv[1];
-    if(argc > 2) input_file_rhs = argv[2];
-    if(argc > 3) output_file_sol = argv[3];
-    if(argc > 4) max_iters = atoi(argv[4]);
-    if(argc > 5) rel_error = atof(argv[5]);
-
-    printf("Command line arguments:\n");
-    printf("  input_file_matrix: %s\n", input_file_matrix);
-    printf("  input_file_rhs:    %s\n", input_file_rhs);
-    printf("  output_file_sol:   %s\n", output_file_sol);
-    printf("  max_iters:         %d\n", max_iters);
-    printf("  rel_error:         %e\n", rel_error);
-    printf("\n");
+    const char* csvFileName = "serial_time_analysis.csv";
+    std::ofstream csvFile(csvFileName, std::ios::app);
+    if (!csvFile.is_open()) {
+        std::cerr << "Error while opening CSV file.\n" << std::endl;
+        return 1;
+    }
 
 
+    for (size_t i=0; i<dimensionSize.size(); ++i)
+    {   
+        std::cout << "--------------------------------------------------------" << std::endl;
+        size_t dimension = dimensionSize[i];
+        std::string complete_matrix_path = "io/" + matrix_name + std::to_string(dimension) + ".bin";
+        std::string complete_rhs_path = "io/" + rhs_name + std::to_string(dimension) + ".bin";
+        std::string complete_sol_path = "io/sol" + std::to_string(dimension) + ".bin";
 
-    double * matrix;
-    double * rhs;
-    size_t size;
+        if(argc > 1) max_iters = atoi(argv[4]);
+        if(argc > 2) rel_error = atof(argv[5]);
 
-    {
-        printf("Reading matrix from file ...\n");
-        size_t matrix_rows;
-        size_t matrix_cols;
-        bool success_read_matrix = read_matrix_from_file(input_file_matrix, &matrix, &matrix_rows, &matrix_cols);
-        if(!success_read_matrix)
+        const char * input_file_matrix  = complete_matrix_path.c_str();
+        const char * input_file_rhs     = complete_rhs_path.c_str();
+        const char * output_file_sol    = complete_sol_path.c_str();
+
+        printf("Command line arguments:\n");
+        printf("  input_file_matrix: %s\n", input_file_matrix);
+        printf("  input_file_rhs:    %s\n", input_file_rhs);
+        printf("  output_file_sol:   %s\n", output_file_sol);
+        printf("  max_iters:         %d\n", max_iters);
+        printf("  rel_error:         %e\n", rel_error);
+        printf("\n");
+
+        double * matrix;
+        double * rhs;
+        size_t size;
+
         {
-            fprintf(stderr, "Failed to read matrix\n");
-            return 1;
+            printf("Reading matrix from file ...\n");
+            size_t matrix_rows;
+            size_t matrix_cols;
+            bool success_read_matrix = read_matrix_from_file(input_file_matrix, &matrix, &matrix_rows, &matrix_cols);
+            if(!success_read_matrix)
+            {
+                fprintf(stderr, "Failed to read matrix\n");
+                return 1;
+            }
+            printf("Done\n");
+            printf("\n");
+
+            printf("Reading right hand side from file ...\n");
+            size_t rhs_rows;
+            size_t rhs_cols;
+            bool success_read_rhs = read_matrix_from_file(input_file_rhs, &rhs, &rhs_rows, &rhs_cols);
+            if(!success_read_rhs)
+            {
+                fprintf(stderr, "Failed to read right hand side\n");
+                return 2;
+            }
+
+            printf("Done\n");
+            printf("\n");
+
+            if(matrix_rows != matrix_cols)
+            {
+                fprintf(stderr, "Matrix has to be square\n");
+                return 3;
+            }
+            if(rhs_rows != matrix_rows)
+            {
+                fprintf(stderr, "Size of right hand side does not match the matrix\n");
+                return 4;
+            }
+            if(rhs_cols != 1)
+            {
+                fprintf(stderr, "Right hand side has to have just a single column\n");
+                return 5;
+            }
+
+            size = dimension;
+        }
+
+        printf("Solving the system ...\n");
+        double * sol = new double[size];
+
+        // Start timer
+        auto start = std::chrono::high_resolution_clock::now();
+        // Solve Ax = b 
+        conjugate_gradients(matrix, rhs, sol, size, max_iters, rel_error);
+        // End timer
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+        
+        
+        // Write data to csv file
+        csvFile << dimension << ", " << duration << "\n";
+        
+        printf("Done\n");
+        printf("\n");
+
+        printf("Writing solution to file ...\n");
+        bool success_write_sol = write_matrix_to_file(output_file_sol, sol, size, 1);
+        if(!success_write_sol)
+        {
+            fprintf(stderr, "Failed to save solution\n");
+            return 6;
         }
         printf("Done\n");
         printf("\n");
 
-        printf("Reading right hand side from file ...\n");
-        size_t rhs_rows;
-        size_t rhs_cols;
-        bool success_read_rhs = read_matrix_from_file(input_file_rhs, &rhs, &rhs_rows, &rhs_cols);
-        if(!success_read_rhs)
-        {
-            fprintf(stderr, "Failed to read right hand side\n");
-            return 2;
-        }
-        printf("Done\n");
-        printf("\n");
+        std::cout<<"Execution time: "<< duration << std::endl;
+        delete[] matrix;
+        delete[] rhs;
+        delete[] sol;
 
-        if(matrix_rows != matrix_cols)
-        {
-            fprintf(stderr, "Matrix has to be square\n");
-            return 3;
-        }
-        if(rhs_rows != matrix_rows)
-        {
-            fprintf(stderr, "Size of right hand side does not match the matrix\n");
-            return 4;
-        }
-        if(rhs_cols != 1)
-        {
-            fprintf(stderr, "Right hand side has to have just a single column\n");
-            return 5;
-        }
-
-        size = matrix_rows;
+        printf("Finished successfully\n");
     }
 
-    printf("Solving the system ...\n");
-    double * sol = new double[size];
-    conjugate_gradients(matrix, rhs, sol, size, max_iters, rel_error);
-    printf("Done\n");
-    printf("\n");
-
-    printf("Writing solution to file ...\n");
-    bool success_write_sol = write_matrix_to_file(output_file_sol, sol, size, 1);
-    if(!success_write_sol)
-    {
-        fprintf(stderr, "Failed to save solution\n");
-        return 6;
-    }
-    printf("Done\n");
-    printf("\n");
-
-    delete[] matrix;
-    delete[] rhs;
-    delete[] sol;
-
-    printf("Finished successfully\n");
+    csvFile.close();
 
     return 0;
 }
