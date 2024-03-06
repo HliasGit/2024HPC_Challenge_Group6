@@ -31,7 +31,39 @@ bool read_matrix_from_file(const char * filename, double ** matrix_out, size_t *
     return true;
 }
 
+bool generate_matrix(double ** matrix_out, size_t N)
+{
+    double * matrix;
+    matrix = new double[N*N];
+    for(size_t i=0; i<N; ++i)
+    {
+        for (size_t j = 0; j < N; j++)
+        {
+            matrix[i * N + j] = 0.0;
+            if (i == j)
+                matrix[i * N + j] = 2.0;
+                if(i < N - 2)
+                {
+                    matrix[(i + 1) * N + j] = 1.0;
+                    matrix[i * N + j + 1] =  -1.0;
+                }
+        }
+    }
+    *matrix_out = matrix;
+    return true;
 
+}
+
+bool generate_rhs(double ** rhs, size_t N)
+{    
+    double * tmp_rhs = new double[N];
+    for(size_t i=0; i<N; ++i)
+        tmp_rhs[i] = 1;
+    
+    *rhs = tmp_rhs;
+    return true;
+
+}
 
 bool write_matrix_to_file(const char * filename, const double * matrix, size_t num_rows, size_t num_cols)
 {

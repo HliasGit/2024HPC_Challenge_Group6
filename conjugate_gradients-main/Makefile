@@ -3,6 +3,7 @@ CC=nvcc
 
 SERIAL_PROGRAM = "serial_cg"
 CUDA_PROGRAM = "conjugate_gradients"
+TEST_PROGRAM = "performance_analysis"
 # These are the options we pass to the compiler.
 # -std=c++14 means we want to use the C++14 standard.
 # -stdlib=libc++ specifies that we want to use the standard library implementation called libc++
@@ -25,16 +26,15 @@ load:
 	module load CUDA
 serial:
 	$(CC) src/$(SERIAL_PROGRAM).cpp -o build/$(SERIAL_PROGRAM)
-
 cuda:
 	$(CC) $(CUDAFLAGS) src/$(CUDA_PROGRAM).cu -o build/$(CUDA_PROGRAM)
 
-clean:
-	rm -f build/test
-	rm -f build/serial_cg
+test:
+	$(CC) $(CUDAFLAGS) -x cu test_performance/$(TEST_PROGRAM).cpp -o $(TEST_PROGRAM)
         
 run_serial:
 	build/./$(SERIAL_PROGRAM) io/matrix.bin io/rhs.bin
 run_cuda:
 	build/./$(CUDA_PROGRAM) io/matrix.bin io/rhs.bin
-
+run_test:
+	./$(TEST_PROGRAM)
