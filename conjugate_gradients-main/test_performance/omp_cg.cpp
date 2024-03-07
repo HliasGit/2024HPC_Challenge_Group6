@@ -1,13 +1,175 @@
-
+#include <cstdio>
+#include <cstdlib>
+#include <cmath>
+#include <omp.h>
+#include <time.h>
 #include <iostream>
 #include <vector>
 #include <string>
 #include <fstream>
 #include <chrono>
-#include "../src/CG_solver.cuh"
+
+bool read_matrix_from_file(const char * filename, double ** matrix_out, size_t * num_rows_out, size_t * num_cols_out)
+{
+    double * matrix;
+    size_t num_rows;
+    size_t num_cols;
+
+    FILE * file = fopen(filename, "rb");
+    if(file == nullptr)
+    {
+        fprintf(stderr, "Cannot open output file\n");
+        return false;
+    }
+
+    fread(&num_rows, sizeof(size_t), 1, file);
+    fread(&num_cols, sizeof(size_t), 1, file);
+    matrix = new double[num_rows * num_cols];
+    fread(matrix, sizeof(double), num_rows * num_cols, file);
+
+    *matrix_out = matrix;
+    *num_rows_out = num_rows;
+    *num_cols_out = num_cols;
+
+    fclose(file);
+
+    return true;
+}
+
+
+
+bool write_matrix_to_file(const char * filename, const double * matrix, size_t num_rows, size_t num_cols)
+{
+    FILE * file = fopen(filename, "wb");
+    if(file == nullptr)
+    {
+        fprintf(stderr, "Cannot open output file\n");
+        return false;
+    }
+
+    fwrite(&num_rows, sizeof(size_t), 1, file);
+    fwrite(&num_cols, sizeof(size_t), 1, file);
+    fwrite(matrix, sizeof(double), num_rows * num_cols, file);
+
+    fclose(file);
+
+    return true;
+}
+
+
+
+void print_matrix(const double * matrix, size_t num_rows, size_t num_cols, FILE * file = stdout)
+{
+    fprintf(file, "%zu %zu\n", num_rows, num_cols);
+    for(size_t r = 0; r < num_rows; r++)
+    {
+        for(size_t c = 0; c < num_cols; c++)
+        {
+            double val = matrix[r * num_cols + c];
+            printf("%+6.3f ", val);
+        }
+        printf("\n");
+    }
+}
+
+
+
+double dot(const double * x, const double * y, size_t size)
+{
+    double result = 0.0;
+    #pragma omp parallel reduction (+ : result)
+    for(size_t i = 0; i < size; i++)
+    {
+        result += x[i] * y[i];
+    }
+    return result;
+}
+
+
+
+void axpby(double alpha, const double * x, double beta, double * y, size_t size)
+{
+    // y = alpha * x + beta * y
+
+    #pragma omp simd
+    for(size_t i = 0; i < size; i++)
+    {
+        y[i] = alpha * x[i] + beta * y[i];
+    }
+}
+
+
+
+void gemv(double alpha, const double * A, const double * x, double beta, double * y, size_t num_rows, size_t num_cols)
+{
+    // y = alpha * A * x + beta * y;
+
+    #pragma omp parallel for
+    for(size_t r = 0; r < num_rows; r++)
+    {
+        double y_val = 0.0;
+        #pragma omp parallel reduction (+ : y_val)
+        for(size_t c = 0; c < num_cols; c++)
+        {
+            y_val += alpha * A[r * num_cols + c] * x[c];
+        }
+        y[r] = beta * y[r] + y_val;
+    }
+}
+
+
+
+void conjugate_gradients(const double * A, const double * b, double * x, size_t size, int max_iters, double rel_error)
+{
+    double alpha, beta, bb, rr, rr_new;
+    double * r = new double[size];
+    double * p = new double[size];
+    double * Ap = new double[size];
+    int num_iters;
+
+    #pragma omp simd
+    for(size_t i = 0; i < size; i++)
+    {
+        x[i] = 0.0;
+        r[i] = b[i];
+        p[i] = b[i];
+    }
+
+    bb = dot(b, b, size);
+    rr = bb;
+    for(num_iters = 1; num_iters <= max_iters; num_iters++)
+    {
+        gemv(1.0, A, p, 0.0, Ap, size, size);
+        alpha = rr / dot(p, Ap, size);
+        axpby(alpha, p, 1.0, x, size);
+        axpby(-alpha, Ap, 1.0, r, size);
+        rr_new = dot(r, r, size);
+        beta = rr_new / rr;
+        rr = rr_new;
+        if(std::sqrt(rr / bb) < rel_error) { break; }
+        axpby(1.0, r, beta, p, size);
+    }
+
+    delete[] r;
+    delete[] p;
+    delete[] Ap;
+
+    if(num_iters <= max_iters)
+    {
+        printf("Converged in %d iterations, relative error is %e\n", num_iters, std::sqrt(rr / bb));
+    }
+    else
+    {
+        printf("Did not converge in %d iterations, relative error is %e\n", max_iters, std::sqrt(rr / bb));
+    }
+}
+
+
+
+
 
 int main(int argc, char ** argv)
-{   
+{
     std::string matrix_name = "matrix";
     std::string rhs_name    = "rhs";
     std::vector<size_t> dimensionSize = {50, 100, 200, 300, 400, 500, 700, 1000, 2000, 5000, 10000, 20000, 30000};
@@ -15,7 +177,7 @@ int main(int argc, char ** argv)
     int max_iters       = 1000000;
     double rel_error    = 1e-8;
 
-    const char* csvFileName = "time_analysis.csv";
+    const char* csvFileName = "omp_time_analysis.csv";
     std::ofstream csvFile(csvFileName, std::ios::app);
     if (!csvFile.is_open()) {
         std::cerr << "Error while opening CSV file.\n" << std::endl;
@@ -72,29 +234,7 @@ int main(int argc, char ** argv)
                 fprintf(stderr, "Failed to read right hand side\n");
                 return 2;
             }
-            // printf("Generating matrix ...\n");
-            // size_t matrix_rows;
-            // size_t matrix_cols;
-            // bool success_read_matrix = generate_matrix(&matrix, dimension);
-            // if(!success_read_matrix)
-            // {
-            //     fprintf(stderr, "Failed to read matrix\n");
-            //     return 1;
-            // }
-            // printf("Done\n");
-            // printf("\n");
 
-            // printf("Generating right hand side ...\n");
-            // size_t rhs_rows;
-            // size_t rhs_cols;
-            // bool success_read_rhs = generate_rhs(&rhs, dimension);
-            // if(!success_read_rhs)
-            // {
-            //     fprintf(stderr, "Failed to read right hand side\n");
-            //     return 2;
-            // }
-            // print_matrix(matrix, dimension, dimension);
-            // print_vet(rhs, dimension);
             printf("Done\n");
             printf("\n");
 
@@ -120,32 +260,10 @@ int main(int argc, char ** argv)
         printf("Solving the system ...\n");
         double * sol = new double[size];
 
-        // Allocate device memory
-        double* d_A;
-        double* d_b;
-        double* d_x;
-        double* d_p;
-        double* d_r;
-        double* d_temp;
-        cudaMalloc((void **) &d_A, size * size * sizeof(double));
-        cudaMalloc((void **) &d_b, size * sizeof(double));
-        cudaMalloc((void **) &d_x, size * sizeof(double));
-        cudaMalloc((void **) &d_p, size * sizeof(double));
-        cudaMalloc((void **) &d_r, size * sizeof(double));
-        cudaMalloc((void **) &d_temp, size * sizeof(double));
-
         // Start timer
         auto start = std::chrono::high_resolution_clock::now();
-        // Copy host memory to device
-        cudaMemcpy(d_A, matrix, size * size * sizeof(double), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_x, sol, size * sizeof(double), cudaMemcpyHostToDevice);
-        // Assume x0 = 0
-        cudaMemcpy(d_p, rhs, size * sizeof(double), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_r, rhs, size * sizeof(double), cudaMemcpyHostToDevice);
         // Solve Ax = b 
-        conjugate_gradients(d_A, d_x, d_p, d_r, size, max_iters, rel_error);
-        // Copy the solution from device to host
-        cudaMemcpy(sol, d_x, size * sizeof(double), cudaMemcpyDeviceToHost);
+        conjugate_gradients(matrix, rhs, sol, size, max_iters, rel_error);
         // End timer
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
@@ -172,14 +290,6 @@ int main(int argc, char ** argv)
         delete[] matrix;
         delete[] rhs;
         delete[] sol;
-
-        // Clean device memory
-        // cleanup memory device
-        cudaFree(d_A);
-        cudaFree(d_b);
-        cudaFree(d_x);
-        cudaFree(d_p);
-        cudaFree(d_r);
 
         printf("Finished successfully\n");
     }
