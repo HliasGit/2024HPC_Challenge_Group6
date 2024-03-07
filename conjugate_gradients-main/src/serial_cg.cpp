@@ -166,7 +166,7 @@ int main(int argc, char ** argv)
 {
     std::string matrix_name = "matrix";
     std::string rhs_name    = "rhs";
-    std::vector<size_t> dimensionSize = {100, 1000, 10000, 20000, 30000};
+    std::vector<size_t> dimensionSize = {100, 500, 1000, 5000, 10000, 20000, 30000};
     std::ofstream convergence_file("build/performance.csv");
     
     int max_iters       = 1000000;
