@@ -16,12 +16,17 @@ int main(int argc, char ** argv)
     double rel_error    = 1e-8;
 
     const char* csvFileName = "time_analysis.csv";
-    std::ofstream csvFile(csvFileName, std::ios::app);
-    if (!csvFile.is_open()) {
+    std::ofstream csvFile_1(csvFileName, std::ios::app);
+    if (!csvFile_1.is_open()) {
         std::cerr << "Error while opening CSV file.\n" << std::endl;
         return 1;
     }
-
+    const char* csvMemCpyName = "mem_copy_analysis.csv";
+    std::ofstream csvFile_2(csvMemCpyName, std::ios::app);
+    if (!csvFile_2.is_open()) {
+        std::cerr << "Error while opening CSV file.\n" << std::endl;
+        return 1;
+    }
 
     for (size_t i=0; i<dimensionSize.size(); ++i)
     {   
@@ -134,8 +139,8 @@ int main(int argc, char ** argv)
         cudaMalloc((void **) &d_r, size * sizeof(double));
         cudaMalloc((void **) &d_temp, size * sizeof(double));
 
-        // Start timer
-        auto start = std::chrono::high_resolution_clock::now();
+        // Start timer for CG times
+        // auto start = std::chrono::high_resolution_clock::now();
         // Copy host memory to device
         cudaMemcpy(d_A, matrix, size * size * sizeof(double), cudaMemcpyHostToDevice);
         cudaMemcpy(d_x, sol, size * sizeof(double), cudaMemcpyHostToDevice);
@@ -145,15 +150,18 @@ int main(int argc, char ** argv)
         // Solve Ax = b 
         conjugate_gradients(d_A, d_x, d_p, d_r, size, max_iters, rel_error);
         // Copy the solution from device to host
+        // Solution copies from device to host
+        auto start = std::chrono::high_resolution_clock::now();
         cudaMemcpy(sol, d_x, size * sizeof(double), cudaMemcpyDeviceToHost);
         // End timer
         auto end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
 
         
-        
-        // Write data to csv file
-        csvFile << dimension << ", " << duration << "\n";
+        // Write data to csv file: CG times
+        //csvFile_1 << dimension << ", " << duration << "\n";
+        // Memory comunication
+        csvFile_2 << dimension << ", " << duration << "\n";
         
         printf("Done\n");
         printf("\n");
@@ -184,7 +192,7 @@ int main(int argc, char ** argv)
         printf("Finished successfully\n");
     }
 
-    csvFile.close();
-
+    csvFile_1.close();
+    csvFile_2.close();
     return 0;
 }
